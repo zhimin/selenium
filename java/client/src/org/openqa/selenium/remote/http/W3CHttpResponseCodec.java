@@ -78,7 +78,7 @@ public class W3CHttpResponseCodec extends AbstractHttpResponseCodec {
     // Are we dealing with an error?
     // {"error":"no such alert","message":"No tab modal was open when attempting to get the dialog text"}
     if (HTTP_OK != encodedResponse.getStatus()) {
-      log.fine("Processing an error");
+      log.warning("Processing an error: " + content);
       JsonObject obj = new JsonParser().parse(content).getAsJsonObject();
 
       JsonElement w3cWrappedValue = obj.get("value");
