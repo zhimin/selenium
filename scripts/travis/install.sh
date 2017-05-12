@@ -21,6 +21,10 @@ if [[ ! -z $PHANTOMJS ]]; then
   phantomjs -v
 fi
 
+if [[ ! -z $SAFARI ]]; then
+  osascript scripts/travis/macos/allow_remote_automation.scpt
+fi
+
 if [[ ! -z $TOXENV ]]; then
   pip install setuptools==28.8.0 tox==2.4.1
 fi

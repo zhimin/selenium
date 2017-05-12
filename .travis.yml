@@ -15,11 +15,10 @@ _bindings:
     jdk: oraclejdk8
   python: &python
     language: python
-    python: "2.7"
+    python: 2.7
   ruby: &ruby
     language: ruby
     rvm: 2.3.3
-    jdk: oraclejdk8
 
 _browsers:
   firefox: &firefox-latest
@@ -36,6 +35,9 @@ _browsers:
       apt:
         packages:
           - google-chrome-stable
+  safari: &safari
+    os: osx
+    osx_image: xcode8.3
 
 matrix:
   fast_finish: true
@@ -134,9 +136,9 @@ matrix:
     - env: TOXENV=py33-unit
       <<: *python
       python: 3.3
-    - language: python
+    - env: TOXENV=py34-unit
+      <<: *python
       python: 3.4
-      env: TOXENV=py34-unit
     - env: TOXENV=py35-unit
       <<: *python
       python: 3.5
@@ -156,7 +158,7 @@ matrix:
     - env: PHANTOMJS=1 TOXENV=py36-phantomjs
       <<: *python
       python: 3.6
-    - env: TOXENV=py36-remote
+      env: TOXENV=py36-remote
       <<: *python
       <<: *firefox-latest
       python: 3.6
@@ -176,6 +178,9 @@ matrix:
       <<: *firefox-esr
     - env: PHANTOMJS=1 TASK=//rb:phantomjs-test
       <<: *ruby
+    - env: SAFARI=1 TASK=//rb:safari-test
+      <<: *safari
+      <<: *ruby
     - env: CHROME=1 TASK=//rb:remote-chrome-test
       <<: *ruby
       <<: *chrome
@@ -190,6 +195,9 @@ matrix:
       <<: *firefox-esr
     - env: PHANTOMJS=1 TASK=//rb:remote-phantomjs-test
       <<: *ruby
+    - env: SAFARI=1 TASK=//rb:remote-safari-test
+      <<: *safari
+      <<: *ruby
     - env: TASK=//rb:docs
       <<: *ruby
   allow_failures:
@@ -203,7 +211,6 @@ matrix:
     - env: TOXENV=py36-remote
     - env: PHANTOMJS=1 TOXENV=py27-phantomjs
     - env: PHANTOMJS=1 TOXENV=py36-phantomjs
-before_install: ./scripts/travis/before_install.sh
 install: ./scripts/travis/install.sh
 before_script: ./scripts/travis/before_script.sh
 script: ./scripts/travis/script.sh
