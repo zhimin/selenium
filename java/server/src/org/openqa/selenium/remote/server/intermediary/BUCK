@@ -5,8 +5,12 @@ java_library(
         '//third_party/java/servlet:servlet-api',
     ],
     deps = [
+        '//java/client/src/org/openqa/selenium/chrome:chrome',
+        '//java/client/src/org/openqa/selenium/edge:edge',
         '//java/client/src/org/openqa/selenium/firefox:firefox',
+        '//java/client/src/org/openqa/selenium/ie:ie',
         '//java/client/src/org/openqa/selenium/remote:remote',
+        '//java/client/src/org/openqa/selenium/safari:safari',
         '//third_party/java/gson:gson',
         '//third_party/java/guava:guava',
     ],

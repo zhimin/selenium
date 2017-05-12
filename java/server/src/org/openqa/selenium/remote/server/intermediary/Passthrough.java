@@ -1,21 +1,30 @@
 package org.openqa.selenium.remote.server.intermediary;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.ByteStreams;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PrintStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.Objects;
+import java.util.logging.Logger;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 public class Passthrough implements SessionCodec {
+
+  private final static Logger LOG = Logger.getLogger(Passthrough.class.getName());
 
   private final static ImmutableSet<String> IGNORED_REQ_HEADERS = ImmutableSet.<String>builder()
       .add("connection")
@@ -63,9 +72,17 @@ public class Passthrough implements SessionCodec {
         connection.addRequestProperty(name, value);
       }
     }
-    try (InputStream in = req.getInputStream();
-         OutputStream out = connection.getOutputStream()) {
-      ByteStreams.copy(in, out);
+
+    if ("POST".equalsIgnoreCase(req.getMethod()) || "PUT".equalsIgnoreCase(req.getMethod())) {
+      ByteArrayOutputStream bos = new ByteArrayOutputStream();
+      try (InputStream in = new TeeInputStream(req.getInputStream(), bos);
+           OutputStream out = connection.getOutputStream()) {
+        ByteStreams.copy(in, out);
+      }
+      String
+          charSet =
+          req.getCharacterEncoding() != null ? req.getCharacterEncoding() : UTF_8.name();
+      LOG.info("To upstream: " + bos.toString(charSet));
     }
 
     resp.setStatus(connection.getResponseCode());
@@ -87,10 +104,16 @@ public class Passthrough implements SessionCodec {
     if (in == null) {
       in = connection.getInputStream();
     }
-    try (OutputStream out = resp.getOutputStream()) {
-      ByteStreams.copy(in, out);
+
+    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+    try (
+        InputStream tee = new TeeInputStream(in, bos);
+        OutputStream out = resp.getOutputStream()) {
+      ByteStreams.copy(tee, out);
     } finally {
       in.close();
     }
+    String charSet = connection.getContentEncoding() != null ? connection.getContentEncoding() : UTF_8.name();
+    LOG.info("To downstream: " + bos.toString(charSet));
   }
 }

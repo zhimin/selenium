@@ -1,23 +1,28 @@
 package org.openqa.selenium.remote.server.intermediary;
 
+import static org.openqa.selenium.remote.BrowserType.CHROME;
+import static org.openqa.selenium.remote.BrowserType.EDGE;
+import static org.openqa.selenium.remote.BrowserType.FIREFOX;
+import static org.openqa.selenium.remote.BrowserType.IE;
+import static org.openqa.selenium.remote.BrowserType.SAFARI;
 import static org.openqa.selenium.remote.CapabilityType.BROWSER_NAME;
 
-import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableMap;
 import com.google.gson.stream.JsonReader;
 
+import org.openqa.selenium.chrome.ChromeDriverService;
+import org.openqa.selenium.edge.EdgeDriverService;
 import org.openqa.selenium.firefox.GeckoDriverService;
+import org.openqa.selenium.ie.InternetExplorerDriverService;
 import org.openqa.selenium.remote.Dialect;
-import org.openqa.selenium.remote.http.JsonHttpCommandCodec;
-import org.openqa.selenium.remote.http.JsonHttpResponseCodec;
-import org.openqa.selenium.remote.http.W3CHttpCommandCodec;
-import org.openqa.selenium.remote.http.W3CHttpResponseCodec;
+import org.openqa.selenium.safari.SafariDriverService;
+import org.openqa.selenium.safari.SafariOptions;
 
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.URL;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,7 +32,9 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 public class BeginSession {
 
@@ -40,10 +47,9 @@ public class BeginSession {
     // dialects the downstream end speaks.
     Path temp = Files.createTempFile("new-session", ".json");
 
-    Set<String> ossKeys = new HashSet<>();
-    Set<String> alwaysMatchKeys = new HashSet<>();
+    Map<String, Object> ossKeys = new HashMap<>();
+    Map<String, Object> alwaysMatchKeys = new HashMap<>();
     List<Map<String, Object>> firstMatchKeys = new LinkedList<>();
-    String browserName = null;
 
     Set<Dialect> identifiedDialects = new HashSet<>();
     try (
@@ -58,10 +64,7 @@ public class BeginSession {
           identifiedDialects.add(Dialect.OSS);
 
           Map<String, Object> caps = sparseCapabilities(json);
-          ossKeys.addAll(caps.keySet());
-          if (ossKeys.contains(BROWSER_NAME)) {
-            browserName = (String) caps.get(BROWSER_NAME);
-          }
+          ossKeys.putAll(caps);
         } else if ("capabilities".equals(name)) {
           json.beginObject();
 
@@ -71,10 +74,7 @@ public class BeginSession {
               identifiedDialects.add(Dialect.W3C);
 
               Map<String, Object> caps = sparseCapabilities(json);
-              alwaysMatchKeys.addAll(caps.keySet());
-              if (alwaysMatchKeys.contains(BROWSER_NAME)) {
-                browserName = (String) caps.get(BROWSER_NAME);
-              }
+              alwaysMatchKeys.putAll(caps);
             } else if ("firstMatch".equals(name)) {
               identifiedDialects.add(Dialect.W3C);
 
@@ -82,9 +82,6 @@ public class BeginSession {
               while (json.hasNext()) {
                 Map<String, Object> caps = sparseCapabilities(json);
                 firstMatchKeys.add(caps);
-                if (caps.containsKey(BROWSER_NAME) && browserName == null) {
-                  browserName = (String) caps.get(BROWSER_NAME);
-                }
               }
               json.endArray();
             } else {
@@ -99,23 +96,51 @@ public class BeginSession {
 
       tee.close();
 
+      String selectedBrowser = determineBrowser(
+          ossKeys,
+          alwaysMatchKeys,
+          firstMatchKeys);
+
       ActiveSession actualSession;
-      switch (browserName) {
+      switch (selectedBrowser) {
+        case "chrome":
+          actualSession = new ServicedSession(
+              ChromeDriverService.createDefaultService(),
+              temp,
+              identifiedDialects);
+          break;
+
+        case "edge":
+          actualSession = new ServicedSession(
+              EdgeDriverService.createDefaultService(),
+              temp,
+              identifiedDialects);
+          break;
+
         case "firefox":
           actualSession = new ServicedSession(
               GeckoDriverService.createDefaultService(),
               temp,
-              ImmutableSet.of(Dialect.OSS));
+              identifiedDialects);
+          break;
+
+        case "internet explorer":
+          actualSession = new ServicedSession(
+              InternetExplorerDriverService.createDefaultService(),
+              temp,
+              identifiedDialects);
+          break;
+
+        case "safari":
+          actualSession = new ServicedSession(
+              SafariDriverService.createDefaultService(new SafariOptions()),
+              temp,
+              identifiedDialects);
           break;
 
         default:
-          throw new IllegalArgumentException("Unknown browser requested: " + browserName);
+          throw new IllegalArgumentException("Unknown browser requested: " + selectedBrowser);
       }
-
-      System.out.println("identifiedDialects = " + identifiedDialects);
-      System.out.println("ossKeys = " + ossKeys);
-      System.out.println("alwaysMatchKeys = " + alwaysMatchKeys);
-      System.out.println("firstMatchKeys = " + firstMatchKeys);
 
       return actualSession;
     } finally {
@@ -132,6 +157,51 @@ public class BeginSession {
     }
   }
 
+  private String determineBrowser(
+      Map<String, Object> ossKeys,
+      Map<String, Object> alwaysMatchKeys,
+      List<Map<String, Object>> firstMatchKeys) {
+    List<Map<String, Object>> allCapabilities = firstMatchKeys.stream()
+        // remove null keys
+        .map(caps -> ImmutableMap.<String, Object>builder().putAll(caps).putAll(alwaysMatchKeys).build())
+        .collect(Collectors.toList());
+    allCapabilities.add(ossKeys);
+
+    // Can we figure out the browser from any of these?
+    for (Map<String, Object> caps : allCapabilities) {
+      Optional<String> detected = caps.entrySet().stream()
+          .map(entry -> guessBrowserName(entry.getKey(), entry.getValue()))
+          .findFirst();
+      if (detected.isPresent()) {
+        return detected.get();
+      }
+    }
+
+    return CHROME;
+  }
+
+  private String guessBrowserName(String capabilityKey, Object value) {
+    if (BROWSER_NAME.equals(capabilityKey)) {
+      return (String) value;
+    }
+    if ("chromeOptions".equals(capabilityKey)) {
+      return CHROME;
+    }
+    if ("edgeOptions".equals(capabilityKey)) {
+      return EDGE;
+    }
+    if (capabilityKey.startsWith("moz:")) {
+      return FIREFOX;
+    }
+    if (capabilityKey.startsWith("safari.")) {
+      return SAFARI;
+    }
+    if ("se:ieOptions".equals(capabilityKey)) {
+      return IE;
+    }
+    return null;
+  }
+
   private Map<String, Object> sparseCapabilities(JsonReader json) throws IOException {
     Map<String, Object> caps = new HashMap<>();
 
@@ -142,7 +212,7 @@ public class BeginSession {
       if (BROWSER_NAME.equals(key)) {
         caps.put(key, json.nextString());
       } else {
-        caps.put(key, null);
+        caps.put(key, "");  // Must not be the null value
         json.skipValue();
       }
     }

@@ -1,6 +1,8 @@
 package org.openqa.selenium.remote.server.intermediary;
 
 
+import static org.openqa.selenium.remote.CapabilityType.BROWSER_NAME;
+
 import com.google.common.base.Preconditions;
 
 import org.openqa.selenium.remote.CommandCodec;
@@ -27,8 +29,11 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.logging.Logger;
 
 class ServicedSession extends ActiveSession {
+
+  private final static Logger LOG = Logger.getLogger(ActiveSession.class.getName());
 
   private final DriverService service;
   private final HttpClient client;
@@ -92,6 +97,12 @@ class ServicedSession extends ActiveSession {
       }
 
       sessionId = new SessionId(response.getSessionId());
+      LOG.info(String.format(
+          "New session (%s). Browser name: %s. Using: %s. Dialect: %s",
+          sessionId,
+          capabilities.get(BROWSER_NAME),
+          codec instanceof Passthrough ? "passthrough mode" : "protocol converting mode",
+          dialect));
     }
   }
 
