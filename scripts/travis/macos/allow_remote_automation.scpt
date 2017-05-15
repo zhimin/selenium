@@ -1,3 +1,13 @@
-tell application "System Events" to tell process "Safari"
-  click menu item "Allow Remote Automation" of menu 1 of menu bar item "Develop" of menu bar 1
+tell application "Safari" to activate
+
+tell application "System Events"
+  tell process "Safari"
+    tell menu bar 1
+      tell menu bar item "Develop"
+	tell menu 1
+	  click menu item "Allow Remote Automation"
+	end tell
+      end tell
+    end tell
+  end tell
 end tell

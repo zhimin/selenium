@@ -22,6 +22,7 @@ if [[ ! -z $PHANTOMJS ]]; then
 fi
 
 if [[ ! -z $SAFARI ]]; then
+  defaults write com.apple.Safari IncludeDevelopMenu 1
   osascript scripts/travis/macos/allow_remote_automation.scpt
 fi
 
