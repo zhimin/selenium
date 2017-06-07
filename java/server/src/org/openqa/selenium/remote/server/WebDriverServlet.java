@@ -20,14 +20,9 @@ package org.openqa.selenium.remote.server;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static org.openqa.selenium.remote.CapabilityType.BROWSER_NAME;
 
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.RemovalListener;
 import com.google.common.net.HttpHeaders;
 import com.google.common.net.MediaType;
 
-import org.openqa.selenium.Platform;
-import org.openqa.selenium.remote.SessionId;
 import org.openqa.selenium.remote.server.xdrpc.CrossDomainRpc;
 import org.openqa.selenium.remote.server.xdrpc.CrossDomainRpcLoader;
 
@@ -55,42 +50,20 @@ public class WebDriverServlet extends HttpServlet {
 
   private final StaticResourceHandler staticResourceHandler = new StaticResourceHandler();
   private final ExecutorService executor = Executors.newCachedThreadPool();
-  private Cache<SessionId, ActiveSession> allSessions;
-  private DriverSessions legacyDriverSessions;
+  private ActiveSessions activeSessions;
   private AllHandlers handlers;
 
   @Override
   public void init() throws ServletException {
     log("Initialising WebDriverServlet");
-    legacyDriverSessions = (DriverSessions) getServletContext().getAttribute(SESSIONS_KEY);
-    if (legacyDriverSessions == null) {
-      legacyDriverSessions = new DefaultDriverSessions(
-          Platform.getCurrent(),
-          new DefaultDriverFactory(),
-          new SystemClock());
-      getServletContext().setAttribute(SESSIONS_KEY, legacyDriverSessions);
+    activeSessions = (ActiveSessions) getServletContext().getAttribute(ACTIVE_SESSIONS_KEY);
+    if (activeSessions == null) {
+      activeSessions = new ActiveSessions(this::log);
+
+      getServletContext().setAttribute(ACTIVE_SESSIONS_KEY, activeSessions);
     }
 
-    allSessions = (Cache<SessionId, ActiveSession>) getServletContext().getAttribute(ACTIVE_SESSIONS_KEY);
-    if (allSessions == null) {
-      RemovalListener<SessionId, ActiveSession> listener = notification -> {
-        log(String.format("Removing session %s: %s", notification.getKey(), notification.getCause()));
-        ActiveSession session = notification.getValue();
-        session.stop();
-        legacyDriverSessions.deleteSession(notification.getKey());
-
-        log(String.format("Post removal: %s and %s", allSessions.asMap(), legacyDriverSessions.getSessions()));
-      };
-
-      allSessions = CacheBuilder.newBuilder()
-          .expireAfterAccess(10, MINUTES)
-          .removalListener(listener)
-          .build();
-
-      getServletContext().setAttribute(ACTIVE_SESSIONS_KEY, allSessions);
-    }
-
-    handlers = new AllHandlers(allSessions, legacyDriverSessions);
+    handlers = new AllHandlers(activeSessions);
   }
 
   @Override
@@ -237,7 +210,8 @@ public class WebDriverServlet extends HttpServlet {
     }
 
     if (invalidateSession && handler instanceof ActiveSession) {
-      allSessions.invalidate(((ActiveSession) handler).getId());
+      activeSessions.invalidate(((ActiveSession) handler).getId());
     }
   }
+
 }

@@ -21,21 +21,11 @@ import static com.google.common.net.HttpHeaders.CONTENT_TYPE;
 import static com.google.common.net.MediaType.JAVASCRIPT_UTF_8;
 import static java.net.HttpURLConnection.HTTP_OK;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.openqa.selenium.remote.BrowserType.CHROME;
-import static org.openqa.selenium.remote.BrowserType.EDGE;
-import static org.openqa.selenium.remote.BrowserType.FIREFOX;
-import static org.openqa.selenium.remote.BrowserType.IE;
-import static org.openqa.selenium.remote.BrowserType.SAFARI;
 import static org.openqa.selenium.remote.CapabilityType.BROWSER_NAME;
-import static org.openqa.selenium.remote.DesiredCapabilities.chrome;
-import static org.openqa.selenium.remote.DesiredCapabilities.firefox;
-import static org.openqa.selenium.remote.DesiredCapabilities.htmlUnit;
 import static org.openqa.selenium.remote.Dialect.OSS;
 import static org.openqa.selenium.remote.Dialect.W3C;
 
 import com.google.common.base.Charsets;
-import com.google.common.cache.Cache;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.net.MediaType;
@@ -45,7 +35,6 @@ import com.google.gson.stream.JsonToken;
 import org.openqa.selenium.SessionNotCreatedException;
 import org.openqa.selenium.remote.BeanToJsonConverter;
 import org.openqa.selenium.remote.Dialect;
-import org.openqa.selenium.remote.SessionId;
 import org.openqa.selenium.remote.http.HttpRequest;
 import org.openqa.selenium.remote.http.HttpResponse;
 
@@ -62,26 +51,13 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.function.Function;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
 class BeginSession implements CommandHandler {
 
-  private final static Logger LOG = Logger.getLogger(BeginSession.class.getName());
+  private final ActiveSessions activeSessions;
 
-  private final Cache<SessionId, ActiveSession> allSessions;
-  private final Map<String, SessionFactory> factories;
-
-  public BeginSession(Cache<SessionId, ActiveSession> allSessions, DriverSessions legacySessions) {
-    this.allSessions = allSessions;
-
-    this.factories = ImmutableMap.of(
-        chrome().getBrowserName(), new ServicedSession.Factory("org.openqa.selenium.chrome.ChromeDriverService"),
-        firefox().getBrowserName(), new ServicedSession.Factory("org.openqa.selenium.firefox.GeckoDriverService"),
-        htmlUnit().getBrowserName(), new InMemorySession.Factory(legacySessions));
+  public BeginSession(ActiveSessions activeSessions) {
+    this.activeSessions = activeSessions;
   }
 
   @Override
@@ -95,10 +71,6 @@ class BeginSession implements CommandHandler {
       List<Map<String, Object>> firstMatch = new LinkedList<>();
 
       readCapabilities(allCaps, req, ossKeys, alwaysMatch, firstMatch);
-      List<SessionFactory> browserGenerators = determineBrowser(
-          ossKeys,
-          alwaysMatch,
-          firstMatch);
 
       ImmutableSet.Builder<Dialect> downstreamDialects = ImmutableSet.builder();
       // Favour OSS for now
@@ -109,20 +81,11 @@ class BeginSession implements CommandHandler {
         downstreamDialects.add(W3C);
       }
 
-      ActiveSession session = browserGenerators.stream()
-            .map(func -> {
-              try {
-                return func.apply(allCaps, downstreamDialects.build());
-              } catch (Exception e) {
-                LOG.log(Level.INFO, "Unable to start session.", e);
-              }
-              return null;
-            })
-            .filter(Objects::nonNull)
-            .findFirst()
-            .orElseThrow(() -> new SessionNotCreatedException("Unable to create a new session"));
-
-      allSessions.put(session.getId(), session);
+      ActiveSession session = activeSessions.createSession(
+          allCaps,
+          alwaysMatch,
+          firstMatch,
+          ossKeys);
 
       Object toConvert;
       switch (session.getDownstreamDialect()) {
@@ -234,52 +197,6 @@ class BeginSession implements CommandHandler {
     }
   }
 
-  private List<SessionFactory> determineBrowser(
-      Map<String, Object> ossKeys,
-      Map<String, Object> alwaysMatchKeys,
-      List<Map<String, Object>> firstMatchKeys) {
-    List<Map<String, Object>> allCapabilities = firstMatchKeys.stream()
-        // remove null keys
-        .map(caps -> ImmutableMap.<String, Object>builder().putAll(caps).putAll(alwaysMatchKeys).build())
-        .collect(Collectors.toList());
-    allCapabilities.add(ossKeys);
-
-    // Can we figure out the browser from any of these?
-    ImmutableList.Builder<SessionFactory> builder = ImmutableList.builder();
-    for (Map<String, Object> caps : allCapabilities) {
-      caps.entrySet().stream()
-          .map(entry -> guessBrowserName(entry.getKey(), entry.getValue()))
-          .filter(factories.keySet()::contains)
-          .map(factories::get)
-          .findFirst()
-          .ifPresent(builder::add);
-    }
-
-    return builder.build();
-  }
-
-  private String guessBrowserName(String capabilityKey, Object value) {
-    if (BROWSER_NAME.equals(capabilityKey)) {
-      return (String) value;
-    }
-    if ("chromeOptions".equals(capabilityKey)) {
-      return CHROME;
-    }
-    if ("edgeOptions".equals(capabilityKey)) {
-      return EDGE;
-    }
-    if (capabilityKey.startsWith("moz:")) {
-      return FIREFOX;
-    }
-    if (capabilityKey.startsWith("safari.")) {
-      return SAFARI;
-    }
-    if ("se:ieOptions".equals(capabilityKey)) {
-      return IE;
-    }
-    return null;
-  }
-
   private Map<String, Object> sparseCapabilities(JsonReader json) throws IOException {
     Map<String, Object> caps = new HashMap<>();
 
@@ -313,13 +230,5 @@ class BeginSession implements CommandHandler {
     json.endObject();
 
     return caps;
-  }
-
-  private static class ServicedSessionFactory implements Function<Path, ActiveSession> {
-
-    @Override
-    public ActiveSession apply(Path path) {
-      return null;
-    }
   }
 }

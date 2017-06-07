@@ -44,12 +44,10 @@ import javax.servlet.http.HttpServletRequest;
 
 class AllHandlers {
 
-  private final Cache<SessionId, ActiveSession> allSessions;
-  private final DriverSessions legacySessions;
+  private final ActiveSessions activeSessions;
 
-  public AllHandlers(Cache<SessionId, ActiveSession> allSessions, DriverSessions legacySessions) {
-    this.allSessions = allSessions;
-    this.legacySessions = legacySessions;
+  public AllHandlers(ActiveSessions activeSessions) {
+    this.activeSessions = activeSessions;
   }
 
   public CommandHandler match(HttpServletRequest req) {
@@ -65,14 +63,14 @@ class AllHandlers {
     }
 
     if (id != null) {
-      ActiveSession session = allSessions.getIfPresent(id);
+      ActiveSession session = activeSessions.getIfPresent(id);
       if (session != null) {
         return session;
       }
     }
 
     if ("POST".equalsIgnoreCase(req.getMethod()) && "/session".equals(path)) {
-      return new BeginSession(allSessions, legacySessions);
+      return new BeginSession(activeSessions);
     }
 
     if ("GET".equalsIgnoreCase(req.getMethod()) && "/status".equals(path)) {

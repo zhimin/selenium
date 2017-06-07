@@ -20,18 +20,29 @@ package org.openqa.selenium.remote.server;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.openqa.selenium.remote.Dialect.OSS;
 
-import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.io.CharStreams;
 
 import org.openqa.selenium.Capabilities;
 import org.openqa.selenium.ImmutableCapabilities;
 import org.openqa.selenium.SessionNotCreatedException;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.io.TemporaryFilesystem;
+import org.openqa.selenium.remote.CommandCodec;
+import org.openqa.selenium.remote.CommandExecutor;
 import org.openqa.selenium.remote.Dialect;
 import org.openqa.selenium.remote.JsonToBeanConverter;
+import org.openqa.selenium.remote.RemoteWebDriver;
+import org.openqa.selenium.remote.ResponseCodec;
 import org.openqa.selenium.remote.SessionId;
 import org.openqa.selenium.remote.http.HttpRequest;
 import org.openqa.selenium.remote.http.HttpResponse;
+import org.openqa.selenium.remote.http.JsonHttpCommandCodec;
+import org.openqa.selenium.remote.http.JsonHttpResponseCodec;
+import org.openqa.selenium.remote.http.W3CHttpCommandCodec;
+import org.openqa.selenium.remote.http.W3CHttpResponseCodec;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -40,11 +51,9 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.FutureTask;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
-
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 
 
 /**
@@ -102,14 +111,10 @@ class InMemorySession implements ActiveSession {
 
   public static class Factory implements SessionFactory {
 
-    private final DriverSessions legacySessions;
-    private final JsonHttpCommandHandler jsonHttpCommandHandler;
+    private final ActiveSessions activeSessions;
 
-    public Factory(DriverSessions legacySessions) {
-      this.legacySessions = Preconditions.checkNotNull(legacySessions);
-      jsonHttpCommandHandler = new JsonHttpCommandHandler(
-          legacySessions,
-          Logger.getLogger(InMemorySession.class.getName()));
+    public Factory(ActiveSessions activeSessions) {
+      this.activeSessions = activeSessions;
     }
 
     @Override
@@ -121,20 +126,192 @@ class InMemorySession implements ActiveSession {
         if (rawCaps == null) {
           rawCaps = new HashMap<>();
         }
-        Capabilities caps = new ImmutableCapabilities(rawCaps);
 
-        SessionId sessionId = legacySessions.newSession(caps);
-        Session session = legacySessions.get(sessionId);
+        ActiveSession activeSession = activeSessions.createSession(
+            path,
+            ImmutableMap.of(),
+            ImmutableList.of(),
+            (Map<String, Object>) rawCaps);
+
+        Session session = new SpoofedSession(activeSessions, activeSession);
 
         // Force OSS dialect if downstream speaks it
         Dialect downstream = downstreamDialects.contains(OSS) ?
                              OSS :
                              Iterables.getFirst(downstreamDialects, null);
 
-        return new InMemorySession(sessionId, session, jsonHttpCommandHandler, downstream);
+        DriverSessions legacySessions = new SpoofedSessions(activeSessions);
+        JsonHttpCommandHandler jsonHttpCommandHandler = new JsonHttpCommandHandler(
+            legacySessions,
+            Logger.getLogger(InMemorySession.class.getName()));
+
+        return new InMemorySession(
+            activeSession.getId(),
+            session,
+            jsonHttpCommandHandler,
+            downstream);
       } catch (Exception e) {
         throw new SessionNotCreatedException("Unable to create session", e);
       }
+    }
+  }
+
+  private static class SpoofedSessions implements DriverSessions {
+
+    private ActiveSessions activeSessions;
+
+    public SpoofedSessions(ActiveSessions activeSessions) {
+      this.activeSessions = activeSessions;
+    }
+
+    @Override
+    public SessionId newSession(Capabilities desiredCapabilities) throws Exception {
+      return null;
+    }
+
+    @Override
+    public Session get(SessionId sessionId) {
+      return null;
+    }
+
+    @Override
+    public void deleteSession(SessionId sessionId) {
+      activeSessions.invalidate(sessionId);
+    }
+
+    @Override
+    public void registerDriver(Capabilities capabilities,
+                               Class<? extends WebDriver> implementation) {
+      throw new UnsupportedOperationException("registerDriver");
+    }
+
+    @Override
+    public Set<SessionId> getSessions() {
+      return activeSessions.getKeys();
+    }
+  }
+
+  private static class SpoofedSession implements Session {
+
+    private final ActiveSessions activeSessions;
+    private final ActiveSession session;
+    private final TemporaryFilesystem tempFs;
+    private final WebDriver driver;
+    private KnownElements knownElements;
+
+    public SpoofedSession(ActiveSessions activeSessions, ActiveSession session) {
+      this.activeSessions = activeSessions;
+      this.session = session;
+
+      Path root = null;
+      try {
+        root = Files.createTempDirectory("old-skool-session");
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
+      this.tempFs = TemporaryFilesystem.getTmpFsBasedOn(root.toAbsolutePath().toFile());
+
+      CommandCodec<HttpRequest> commandCodec;
+      switch (session.getUpstreamDialect()) {
+        case OSS:
+          commandCodec = new JsonHttpCommandCodec();
+          break;
+
+        case W3C:
+          commandCodec = new W3CHttpCommandCodec();
+          break;
+
+        default:
+          throw new IllegalArgumentException(
+              "Unrecognised upstream codec: " + session.getUpstreamDialect());
+      }
+
+      ResponseCodec<HttpResponse> responseCodec;
+      switch (session.getDownstreamDialect()) {
+        case OSS:
+          responseCodec = new JsonHttpResponseCodec();
+          break;
+
+        case W3C:
+          responseCodec = new W3CHttpResponseCodec();
+          break;
+
+        default:
+          throw new IllegalArgumentException(
+              "Unrecognised upstream codec: " + session.getDownstreamDialect());
+      }
+
+      CommandExecutor executor = cmd -> {
+        HttpRequest req = commandCodec.encode(cmd);
+        HttpResponse res = new HttpResponse();
+        session.execute(req, res);
+        return responseCodec.decode(res);
+      };
+
+      this.driver = new RemoteWebDriver(executor, getCapabilities());
+      this.knownElements = new KnownElements();
+    }
+
+    @Override
+    public void close() {
+      activeSessions.invalidate(session.getId());
+      tempFs.deleteBaseDir();
+    }
+
+    @Override
+    public <X> X execute(FutureTask<X> future) throws Exception {
+      throw new UnsupportedOperationException("execute");
+    }
+
+    @Override
+    public WebDriver getDriver() {
+      return driver;
+    }
+
+    @Override
+    public KnownElements getKnownElements() {
+      return knownElements;
+    }
+
+    @Override
+    public Capabilities getCapabilities() {
+      return new ImmutableCapabilities(session.getCapabilities());
+    }
+
+    @Override
+    public void attachScreenshot(String base64EncodedImage) {
+      // Do nothing
+    }
+
+    @Override
+    public String getAndClearScreenshot() {
+      // This is legit
+      return null;
+    }
+
+    @Override
+    public boolean isTimedOut(long timeout) {
+      return false;
+    }
+
+    @Override
+    public boolean isInUse() {
+      return false;
+    }
+
+    @Override
+    public void updateLastAccessTime() {
+      // no-op
+    }
+
+    @Override
+    public SessionId getSessionId() {
+      return session.getId();
+    }
+
+    @Override
+    public TemporaryFilesystem getTemporaryFileSystem() {
+      return tempFs;
     }
   }
 }
