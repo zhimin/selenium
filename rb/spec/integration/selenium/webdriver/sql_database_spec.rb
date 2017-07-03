@@ -33,7 +33,8 @@ module Selenium
           wait.until { driver.find_element(id: 'db_completed') }
         end
 
-        compliant_on browser: nil do
+        # TODO: WTF?
+        # compliant_on browser: nil do
           it 'includes inserted rows in the result set' do
             driver.execute_sql insert, 'DocFoo'
             driver.execute_sql insert, 'DocFooBar'
@@ -73,7 +74,7 @@ module Selenium
             result = driver.execute_sql delete
             expect(result.last_inserted_row_id).to eq(-1)
           end
-        end
+        # end
       end
     end
   end # WebDriver

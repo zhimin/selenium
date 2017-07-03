@@ -21,7 +21,6 @@ module Selenium
   module WebDriver
     module SpecSupport
       class TestEnvironment
-        attr_accessor :unguarded
         attr_reader :driver
 
         def initialize
@@ -29,6 +28,19 @@ module Selenium
           @create_driver_error_count = 0
 
           @driver = (ENV['WD_SPEC_DRIVER'] || :chrome).to_sym
+        end
+
+        def print_env
+          puts "\nRunning Ruby specs:\n\n"
+
+          env = current_env.merge(ruby: defined?(RUBY_DESCRIPTION) ? RUBY_DESCRIPTION : "ruby-#{RUBY_VERSION}")
+
+          just = current_env.keys.map { |e| e.to_s.size }.max
+          env.each do |key, value|
+            puts "#{key.to_s.rjust(just)}: #{value}"
+          end
+
+          puts "\n"
         end
 
         def browser
@@ -113,12 +125,6 @@ module Selenium
           @remote_server.stop if defined? @remote_server
 
           @driver_instance = @app_server = @remote_server = nil
-        ensure
-          Guards.report
-        end
-
-        def unguarded?
-          @unguarded ||= false
         end
 
         def native_events?
@@ -170,6 +176,16 @@ module Selenium
         end
 
         private
+
+        def current_env
+          {
+            browser: browser,
+            driver: driver,
+            platform: Platform.os,
+            native: native_events?,
+            ci: Platform.ci
+          }
+        end
 
         def create_driver(opt = {})
           method = "create_#{driver}_driver".to_sym
